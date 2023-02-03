@@ -1,8 +1,11 @@
 package telegram
 
 import (
+	"log"
+
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
-	"github.com/hatersduck/balanceArchy-bot/config"
+	"github.com/hatersduck/balanceArchy-bot/pkg/config"
+	"github.com/hatersduck/balanceArchy-bot/pkg/tdb"
 	"github.com/jackc/pgx"
 )
 
@@ -12,20 +15,16 @@ type Bot struct {
 	messages config.Messages
 	db       *pgx.Conn
 
-	add map[int64]*newEvent
+	add map[int64]*Event
 }
 
-type newEvent struct {
+type Event struct {
 	main   string
 	first  string
 	second string
 	state  uint8
-}
 
-type Answer struct {
-	event  string `db:"event"`
-	first  string `db:"fir"`
-	second string `db:"sec"`
+	*tdb.Answer
 }
 
 func NewBot(bot *tgbotapi.BotAPI, messages config.Messages, conn *pgx.Conn) *Bot {
@@ -33,7 +32,7 @@ func NewBot(bot *tgbotapi.BotAPI, messages config.Messages, conn *pgx.Conn) *Bot
 		bot:      bot,
 		messages: messages,
 		db:       conn,
-		add:      make(map[int64]*newEvent),
+		add:      make(map[int64]*Event),
 	}
 }
 
@@ -43,7 +42,7 @@ func (b *Bot) Start() error {
 	if err != nil {
 		return err
 	}
-
+	log.Println("bot started")
 	b.handlerUpdates(updates)
 
 	return nil

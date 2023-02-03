@@ -4,6 +4,7 @@ import (
 	"log"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+	"github.com/hatersduck/balanceArchy-bot/pkg/tdb"
 )
 
 const (
@@ -12,14 +13,13 @@ const (
 
 func (b *Bot) handlerUpdates(updates tgbotapi.UpdatesChannel) {
 	for update := range updates {
+		log.Println(b.add)
 		switch {
 		case update.Message != nil:
 			if update.Message.IsCommand() {
 				b.handleCommand(update.Message)
 			} else if update.Message.ForwardFrom != nil {
-				if update.Message.ForwardFrom.UserName == "TonarchyBot" {
-					b.answer(update.Message)
-				}
+				b.answer(update.Message)
 			} else {
 				b.handleMessage(update.Message)
 			}
@@ -36,25 +36,34 @@ func (b *Bot) handlerUpdates(updates tgbotapi.UpdatesChannel) {
 
 func (b *Bot) handleCallback(callback *tgbotapi.CallbackQuery) error {
 	id := callback.Message.Chat.ID
+	msg := callback.Message
+
 	switch callback.Data {
 	case "newEvent":
-		b.add[id] = &newEvent{state: 1}
 		b.newEvent(id)
+
 	case "cancel":
-		b.add[id] = &newEvent{}
+		b.add[id] = &Event{}
 		b.cancel(id)
 		b.comStart(id)
 	case "skip_first":
-		b.add[id].first = empty
-		b.add[id].state = 3
-		b.secondEv(id)
+		if val, ok := b.add[id]; ok {
+			val.first = empty
+			val.state = 2
+			msg.Text = empty
+			b.handleMessage(msg)
+		} else {
+			b.comStart(id)
+		}
+
 	case "skip_second":
-		b.add[id].second = empty
-		val := b.add[id]
-
-		b.Execc(val, id, callback.From.UserName)
+		if val, ok := b.add[id]; ok {
+			val.second = empty
+			b.Execc(val, id, callback.From.UserName)
+		} else {
+			b.comStart(id)
+		}
 	}
-
 	return nil
 }
 
@@ -65,37 +74,26 @@ func (b *Bot) handleMessage(message *tgbotapi.Message) error {
 		switch val.state {
 		case 1:
 			val.main = message.Text
+			val.Answer, _ = tdb.GetEvent(b.db, val.main)
+			val.state = 2
 
-			ans := &Answer{}
-			err := b.db.QueryRow("SELECT event, fir, sec FROM events WHERE event LIKE $1", val.main+"%").Scan(&ans.event, &ans.first, &ans.second)
-			if err != nil {
-				log.Println("CHECK:", err)
-			}
-			if ans.event != "" {
-				if ans.first != empty && ans.second != empty {
-					mess := tgbotapi.NewMessage(id, "Варианты уже созданы для обновления напишите @errData")
-					b.bot.Send(mess)
-					b.comStart(id)
-				} else if ans.first != empty {
-					mess := tgbotapi.NewMessage(id, "Первый вариант уже создан")
-					b.bot.Send(mess)
-					val.state = 3
-					b.secondEv(id)
-				}
+			if val.First != empty && val.First != "" {
+				mess := tgbotapi.NewMessage(id, "Первый вариант уже создан")
+				b.bot.Send(mess)
+
+				message.Text = empty
+				b.handleMessage(message)
 			} else {
-				val.state = 2
 				b.firstEv(id)
 			}
 		case 2:
 			val.first = message.Text
 			val.state = 3
-			ans := &Answer{}
-			err := b.db.QueryRow("SELECT event, fir, sec FROM events WHERE event LIKE $1", val.main+"%").Scan(&ans.event, &ans.first, &ans.second)
-			if err != nil {
-				log.Println("CHECK:", err)
-			}
-			if ans.event != "" && ans.second != empty {
+
+			if val.Second != empty && val.Second != "" {
+				val.second = empty
 				mess := tgbotapi.NewMessage(id, "Второй вариант уже создан")
+
 				b.bot.Send(mess)
 				b.Execc(val, id, message.From.UserName)
 			} else {
@@ -104,41 +102,46 @@ func (b *Bot) handleMessage(message *tgbotapi.Message) error {
 		case 3:
 			val.second = message.Text
 			b.Execc(val, id, message.From.UserName)
-
 		}
 	}
 	return nil
 }
 
-func (b *Bot) Execc(val *newEvent, id int64, username string) {
-	ans := &Answer{}
-	var sel_id *int
-	err := b.db.QueryRow("SELECT id, event, fir, sec FROM events WHERE event LIKE $1", val.main+"%").Scan(&sel_id, &ans.event, &ans.first, &ans.second)
-	log.Println(ans)
-	if ans.event == "" {
-		_, err = b.db.Exec("INSERT INTO events (event, fir, sec, user_id, username) VALUES ($1, $2, $3, $4, $5) ",
+func (b *Bot) Execc(val *Event, id int64, username string) {
+	if val.Id == 0 {
+		_, err := b.db.Exec("INSERT INTO events (event, fir, sec, user_id, username) VALUES ($1, $2, $3, $4, $5) ",
 			val.main, val.first, val.second, id, username)
 		if err != nil {
 			log.Println("EXEC:", err)
 		} else {
-			message := tgbotapi.NewMessage(id, "Событие успешно добавлено, Спасибо!")
+			message := tgbotapi.NewMessage(id, "Событие успешно добавлено, cпасибо!")
 			b.bot.Send(message)
 		}
 	} else {
-		if ans.first == empty {
-			_, err = b.db.Exec("UPDATE events SET fir=$1 WHERE id=$2", val.first, *sel_id)
+		var err error
+		var check bool
+		if val.First == empty || val.First == "" {
+			_, err = b.db.Exec("UPDATE events SET fir=$1 WHERE id=$2", val.first, val.Id)
+			check = true
 		}
-		if ans.second == empty {
-			_, err = b.db.Exec("UPDATE events SET sec=$1 WHERE id=$2", val.second, *sel_id)
+		if val.Second == empty || val.Second == "" {
+			_, err = b.db.Exec("UPDATE events SET sec=$1 WHERE id=$2", val.second, val.Id)
+			check = true
 		}
+		message := tgbotapi.NewMessage(id, "")
 		if err != nil {
-			log.Println("UPDATE:", err)
+			message.Text = "Событие не обновлено\n" + err.Error() + "\nОтправьте скриншот диалога @errData"
 		} else {
-			message := tgbotapi.NewMessage(id, "Событие успешно дополнено, Спасибо!")
-			b.bot.Send(message)
+			if check {
+				message.Text = "Событие дополнено, спасибо!"
+			} else {
+				message.Text = "Если вы уверены, что указаны не правильные ответы, то обратитесь к @errData"
+			}
 		}
-	}
+		b.bot.Send(message)
 
+	}
+	delete(b.add, id)
 	b.comStart(id)
 }
 
@@ -151,7 +154,7 @@ func (b *Bot) handleCommand(command *tgbotapi.Message) error {
 	if command.Text == commandStart {
 		b.comStart(command.Chat.ID)
 	} else if command.Text == commandAdd {
-		b.add[command.Chat.ID] = &newEvent{state: 1}
+		b.add[command.Chat.ID] = &Event{state: 1}
 		b.newEvent(command.Chat.ID)
 	}
 	return nil
@@ -165,6 +168,8 @@ func (b *Bot) comStart(id int64) {
 }
 
 func (b *Bot) newEvent(id int64) {
+	b.add[id] = &Event{state: 1}
+
 	message := tgbotapi.NewMessage(id, b.messages.NewEvent)
 	buttons := tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(b.messages.BtnCancel, "cancel"))
 	message.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons)
@@ -172,16 +177,12 @@ func (b *Bot) newEvent(id int64) {
 }
 
 func (b *Bot) answer(msg *tgbotapi.Message) {
-	ans := &Answer{}
-	err := b.db.QueryRow("SELECT fir, ser FROM events WHERE event LIKE $1", msg.Text).Scan(&ans.first, &ans.second)
-	if err != nil {
-		log.Println("SELECT", err)
-	}
+	ans, _ := tdb.GetEvent(b.db, msg.Text)
 	var text string
-	if ans.event == "" {
+	if ans.Id == 0 {
 		text = "Данного события ещё нету вы можете добавить его /add"
 	} else {
-		text = "Первый вариант: " + ans.first + "\nВторой вариант:" + ans.second
+		text = "Первый вариант: " + ans.First + "\nВторой вариант: " + ans.Second
 	}
 	mess := tgbotapi.NewMessage(msg.Chat.ID, text)
 	b.bot.Send(mess)

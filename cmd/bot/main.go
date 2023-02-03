@@ -6,7 +6,7 @@ import (
 	"os"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
-	"github.com/hatersduck/balanceArchy-bot/config"
+	"github.com/hatersduck/balanceArchy-bot/pkg/config"
 	"github.com/hatersduck/balanceArchy-bot/pkg/telegram"
 	"github.com/jackc/pgx"
 )
@@ -21,7 +21,7 @@ func main() {
 	if err != nil {
 		log.Panic(err)
 	}
-	bot.Debug = true
+	bot.Debug = false
 
 	conn, err := pgx.Connect(pgx.ConnConfig{
 		Database: "archydb",
